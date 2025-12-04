@@ -7,12 +7,14 @@ if (!token) {
   process.exit(1);
 }
 
-const baseUrl = process.env.DEX_BASE_URL;
+let baseUrl = process.env.DEX_BASE_URL;
 
 if (!baseUrl) {
   console.error('Please set DEX_BASE_URL in your environment before running this script.');
   process.exit(1);
 }
+
+baseUrl = "wss://" + baseUrl + "/v1/ws";
 
 const client = new DexWebSocketClient({
   baseUrl,

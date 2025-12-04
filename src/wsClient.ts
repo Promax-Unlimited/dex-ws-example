@@ -9,6 +9,7 @@ export type DexWebSocketClientOptions = {
   onMessage?: (message: unknown, raw: WebSocket.RawData) => void;
   onError?: (error: Error) => void;
   onClose?: (code: number, reason: Buffer) => void;
+  onPong?: (data: Buffer) => void;
 };
 
 export class DexWebSocketClient {
@@ -20,7 +21,7 @@ export class DexWebSocketClient {
   private readonly heartbeatIntervalMs: number;
   private readonly handlers: Pick<
     DexWebSocketClientOptions,
-    'onOpen' | 'onMessage' | 'onError' | 'onClose'
+    'onOpen' | 'onMessage' | 'onError' | 'onClose' | 'onPong'
   >;
 
   constructor(options: DexWebSocketClientOptions) {
@@ -34,6 +35,7 @@ export class DexWebSocketClient {
       onMessage: options.onMessage,
       onError: options.onError,
       onClose: options.onClose,
+      onPong: options.onPong,
     };
   }
 
@@ -61,6 +63,10 @@ export class DexWebSocketClient {
         this.stopHeartbeat();
       }
       this.handlers.onClose?.(code, reason);
+    });
+
+    this.socket.on('pong', (data) => {
+      this.handlers.onPong?.(data);
     });
   }
 
