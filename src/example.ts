@@ -14,7 +14,7 @@ if (!baseUrl) {
   process.exit(1);
 }
 
-baseUrl = "wss://" + baseUrl + "/v1/ws";
+baseUrl = "ws://" + baseUrl + "/v1/ws";
 
 const client = new DexWebSocketClient({
   baseUrl,
@@ -22,6 +22,8 @@ const client = new DexWebSocketClient({
   // isStream: true,
   onOpen: () => {
     console.log('Connected.\n');
+    // Data transfer begins only when the client explicitly requests it after the connection is established
+    client.send({});
   },
   onMessage: (message) => {
     console.log(JSON.stringify(message, null, 2));
