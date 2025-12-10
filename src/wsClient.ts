@@ -5,6 +5,7 @@ export type DexWebSocketClientOptions = {
   baseUrl: string;
   isStream?: boolean;
   heartbeatIntervalMs?: number;
+  messagePollingIntervalMs?: number;
   onOpen?: () => void;
   onMessage?: (message: unknown, raw: WebSocket.RawData) => void;
   onError?: (error: Error) => void;
@@ -15,21 +16,31 @@ export type DexWebSocketClientOptions = {
 export class DexWebSocketClient {
   private socket?: WebSocket;
   private heartbeatTimer?: NodeJS.Timeout;
+  private pollingTimer?: NodeJS.Timeout;
   private readonly baseUrl: string;
   private readonly isStream: boolean;
   private readonly token: string;
   private readonly heartbeatIntervalMs: number;
+  private readonly messagePollingIntervalMs: number;
   private readonly handlers: Pick<
     DexWebSocketClientOptions,
     'onOpen' | 'onMessage' | 'onError' | 'onClose' | 'onPong'
   >;
 
   constructor(options: DexWebSocketClientOptions) {
-    console.debug('DexWebSocketClient options:', options);
     this.baseUrl = options.baseUrl;
     this.token = options.token;
     this.isStream = options.isStream ?? false;
-    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 1_000;
+    this.messagePollingIntervalMs = options.messagePollingIntervalMs ?? 10_000;
+
+    if (this.heartbeatIntervalMs > this.messagePollingIntervalMs) {
+      throw new Error(
+        `heartbeatIntervalMs (${this.heartbeatIntervalMs}ms) must be less than ` +
+        `messagePollingIntervalMs (${this.messagePollingIntervalMs}ms)`
+      );
+    }
+
     this.handlers = {
       onOpen: options.onOpen,
       onMessage: options.onMessage,
@@ -46,9 +57,8 @@ export class DexWebSocketClient {
     }
     this.socket = new WebSocket(url);
     this.socket.on('open', () => {
-      if (!this.isStream) {
-        this.startHeartbeat();
-      }
+      this.startHeartbeat();
+      this.startPollingTransactions();
       this.handlers.onOpen?.();
     });
     this.socket.on('message', (data) => {
@@ -59,12 +69,10 @@ export class DexWebSocketClient {
       this.handlers.onError?.(normalizeError(err));
     });
     this.socket.on('close', (code, reason) => {
-      if (!this.isStream) {
-        this.stopHeartbeat();
-      }
+      this.stopHeartbeat();
+      this.stopPollingTransactions();
       this.handlers.onClose?.(code, reason);
     });
-
     this.socket.on('pong', (data) => {
       this.handlers.onPong?.(data);
     });
@@ -80,6 +88,7 @@ export class DexWebSocketClient {
 
   close(code?: number, reason?: string): void {
     this.stopHeartbeat();
+    this.stopPollingTransactions();
     this.socket?.close(code, reason);
   }
 
@@ -96,6 +105,25 @@ export class DexWebSocketClient {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
+    }
+  }
+
+  private startPollingTransactions(): void {
+    if (this.isStream) {
+      return;
+    }
+    this.stopPollingTransactions();
+    this.pollingTimer = setInterval(() => {
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        this.send({});
+      }
+    }, this.messagePollingIntervalMs);
+  }
+
+  private stopPollingTransactions(): void {
+    if (this.pollingTimer) {
+      clearInterval(this.pollingTimer);
+      this.pollingTimer = undefined;
     }
   }
 }

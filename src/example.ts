@@ -22,9 +22,6 @@ const client = new DexWebSocketClient({
   // isStream: true,
   onOpen: () => {
     console.log('Connected.\n');
-    // Data transfer begins only when the client explicitly requests it after the connection is established
-    // In stream mode `isStream: true` there is no need to send data to start the transfer
-    client.send({});
   },
   onMessage: (message) => {
     console.log(JSON.stringify(message, null, 2));
