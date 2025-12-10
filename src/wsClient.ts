@@ -6,6 +6,10 @@ export type DexWebSocketClientOptions = {
   isStream?: boolean;
   heartbeatIntervalMs?: number;
   messagePollingIntervalMs?: number;
+  pongTimeoutMs?: number;
+  maxMissedPongs?: number;
+  reconnectDelayMs?: number;
+  autoReconnect?: boolean;
   onOpen?: () => void;
   onMessage?: (message: unknown, raw: WebSocket.RawData) => void;
   onError?: (error: Error) => void;
@@ -17,11 +21,18 @@ export class DexWebSocketClient {
   private socket?: WebSocket;
   private heartbeatTimer?: NodeJS.Timeout;
   private pollingTimer?: NodeJS.Timeout;
+  private lastPongAt?: number;
+  private missedPongs = 0;
+  private systemClose = false;
   private readonly baseUrl: string;
   private readonly isStream: boolean;
   private readonly token: string;
   private readonly heartbeatIntervalMs: number;
   private readonly messagePollingIntervalMs: number;
+  private readonly pongTimeoutMs: number;
+  private readonly maxMissedPongs: number;
+  private readonly reconnectDelayMs: number;
+  private readonly autoReconnect: boolean;
   private readonly handlers: Pick<
     DexWebSocketClientOptions,
     'onOpen' | 'onMessage' | 'onError' | 'onClose' | 'onPong'
@@ -32,12 +43,18 @@ export class DexWebSocketClient {
     this.token = options.token;
     this.isStream = options.isStream ?? false;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 1_000;
-    this.messagePollingIntervalMs = options.messagePollingIntervalMs ?? 10_000;
+    this.messagePollingIntervalMs = options.messagePollingIntervalMs ?? 5_000;
+    this.pongTimeoutMs = options.pongTimeoutMs ?? 3_000;
+    this.maxMissedPongs = options.maxMissedPongs ?? 2;
+    this.reconnectDelayMs = options.reconnectDelayMs ?? 1000;
+    this.autoReconnect = options.autoReconnect ?? true;
 
-    if (this.heartbeatIntervalMs > this.messagePollingIntervalMs) {
+    const combinedRecoveryBudget =
+      this.heartbeatIntervalMs + this.pongTimeoutMs + this.reconnectDelayMs;
+    if (combinedRecoveryBudget > this.messagePollingIntervalMs) {
       throw new Error(
-        `heartbeatIntervalMs (${this.heartbeatIntervalMs}ms) must be less than ` +
-        `messagePollingIntervalMs (${this.messagePollingIntervalMs}ms)`
+        `messagePollingIntervalMs (${this.messagePollingIntervalMs}ms) must be greater than ` +
+        `heartbeatIntervalMs + pongTimeoutMs + reconnectDelayMs`
       );
     }
 
@@ -55,8 +72,11 @@ export class DexWebSocketClient {
     if (this.isStream) {
       url = url.concat('&stream=true');
     }
+    this.systemClose = false;
     this.socket = new WebSocket(url);
     this.socket.on('open', () => {
+      this.missedPongs = 0;
+      this.lastPongAt = Date.now();
       this.startHeartbeat();
       this.startPollingTransactions();
       this.handlers.onOpen?.();
@@ -72,8 +92,14 @@ export class DexWebSocketClient {
       this.stopHeartbeat();
       this.stopPollingTransactions();
       this.handlers.onClose?.(code, reason);
+
+      if (!this.systemClose && this.autoReconnect) {
+        this.scheduleReconnect();
+      }
     });
     this.socket.on('pong', (data) => {
+      this.lastPongAt = Date.now();
+      this.missedPongs = 0;
       this.handlers.onPong?.(data);
     });
   }
@@ -87,6 +113,7 @@ export class DexWebSocketClient {
   }
 
   close(code?: number, reason?: string): void {
+    this.systemClose = true;
     this.stopHeartbeat();
     this.stopPollingTransactions();
     this.socket?.close(code, reason);
@@ -95,6 +122,7 @@ export class DexWebSocketClient {
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
+      this.evaluateConnectionHealth();
       if (this.socket?.readyState === WebSocket.OPEN) {
         this.socket.ping();
       }
@@ -125,6 +153,33 @@ export class DexWebSocketClient {
       clearInterval(this.pollingTimer);
       this.pollingTimer = undefined;
     }
+  }
+
+  private evaluateConnectionHealth(): void {
+    if (!this.lastPongAt) {
+      return;
+    }
+    const elapsed = Date.now() - this.lastPongAt;
+    if (elapsed <= this.pongTimeoutMs) {
+      return;
+    }
+
+    this.missedPongs += 1;
+    if (this.missedPongs >= this.maxMissedPongs) {
+      const reason = `Exceeded ${this.maxMissedPongs} missed pong window(s)`;
+      this.handleUnresponsiveConnection(reason);
+    }
+  }
+
+  private handleUnresponsiveConnection(reason: string): void {
+    console.warn(`WebSocket unresponsive: ${reason}. Closing connection.`);
+    this.socket?.terminate();
+  }
+
+  private scheduleReconnect(): void {
+    setTimeout(() => {
+      this.connect();
+    }, this.reconnectDelayMs);
   }
 }
 
