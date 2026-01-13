@@ -30,7 +30,7 @@ const client = new DexWebSocketClient({
     console.error('WebSocket response:', error.message);
   },
   onClose: (code, reason) => {
-    console.log(`Connection closed (code=${code}, reason=${reason.toString() || 'n/a'})`);
+    console.log(`Connection closed (code=${code}, reason=${reason.toString('utf8') || 'n/a'})`);
   },
 });
 

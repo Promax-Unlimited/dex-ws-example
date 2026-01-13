@@ -10,6 +10,7 @@ export type DexWebSocketClientOptions = {
   maxMissedPongs?: number;
   reconnectDelayMs?: number;
   autoReconnect?: boolean;
+  reconnectAttempts?: number;
   onOpen?: () => void;
   onMessage?: (message: unknown, raw: WebSocket.RawData) => void;
   onError?: (error: Error) => void;
@@ -23,6 +24,7 @@ export class DexWebSocketClient {
   private pollingTimer?: NodeJS.Timeout;
   private lastPongAt?: number;
   private missedPongs = 0;
+  private reconnectAttempts: number;
   private systemClose = false;
   private readonly baseUrl: string;
   private readonly isStream: boolean;
@@ -48,6 +50,7 @@ export class DexWebSocketClient {
     this.maxMissedPongs = options.maxMissedPongs ?? 2;
     this.reconnectDelayMs = options.reconnectDelayMs ?? 1000;
     this.autoReconnect = options.autoReconnect ?? true;
+    this.reconnectAttempts = options.reconnectAttempts ?? 3;
 
     const combinedRecoveryBudget =
       this.heartbeatIntervalMs + this.pongTimeoutMs + this.reconnectDelayMs;
@@ -178,6 +181,11 @@ export class DexWebSocketClient {
 
   private scheduleReconnect(): void {
     setTimeout(() => {
+      this.reconnectAttempts -= 1;
+      if (this.reconnectAttempts <= 0) {
+        console.error('Max reconnect attempts reached.');
+        return;
+      }
       this.connect();
     }, this.reconnectDelayMs);
   }
